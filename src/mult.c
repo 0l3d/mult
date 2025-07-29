@@ -16,6 +16,7 @@ void mult_generate_mult_file(const char *filename) {
 
   fclose(multfile);
 }
+
 void mult_add_file_to_mult_file(const char *in, const char *out, int parent) {
   FILE *mult_in = fopen(in, "rb");
   if (mult_in == NULL) {
@@ -27,81 +28,56 @@ void mult_add_file_to_mult_file(const char *in, const char *out, int parent) {
   long size = ftell(mult_in);
   rewind(mult_in);
 
-  FILE *mult_out = fopen(out, "ab");
-  if (mult_out == NULL) {
-    perror("add file output file open failed");
+  char *buffer = malloc(size);
+  if (buffer == NULL) {
+    perror("add file memory allocation failed");
     fclose(mult_in);
     return;
   }
 
-  int type = TYPEFILE;
-  fwrite(&type, sizeof(int), 1, mult_out);
-
-  int name_len = strlen(in);
-  fwrite(&name_len, sizeof(int), 1, mult_out);
-  fwrite(in, sizeof(char), name_len, mult_out);
-
-  long current_pos = ftell(mult_out);
-  long data_offset = current_pos + sizeof(int) * 3;
-
-  fwrite(&data_offset, sizeof(long), 1, mult_out);
-  fwrite(&parent, sizeof(int), 1, mult_out);
-  fwrite(&size, sizeof(long), 1, mult_out);
-
-  char buffer[8192];
-  size_t bytes_read;
-  while ((bytes_read = fread(buffer, 1, sizeof(buffer), mult_in)) > 0) {
-    fwrite(buffer, 1, bytes_read, mult_out);
+  size_t read_bytes = fread(buffer, 1, size, mult_in);
+  if (read_bytes != size) {
+    perror("add file file read error");
+    free(buffer);
+    fclose(mult_in);
+    return;
   }
 
   fclose(mult_in);
-  fclose(mult_out);
-}
 
-void mult_add_folder_to_mult_file(const char *in, const char *out, int parent) {
-  DIR *dr = opendir(in);
-  if (!dr) {
-    perror("add folder open dir failed");
+  FILE *mult_out = fopen(out, "ab+");
+  if (mult_out == NULL) {
+    perror("add file output file open failed");
+    free(buffer);
     return;
   }
 
-  FILE *mult_out = fopen(out, "ab");
-  if (!mult_out) {
-    perror("add folder file open failed");
-    closedir(dr);
-    return;
-  }
-
+  fseek(mult_out, 0, SEEK_END);
   long offset = ftell(mult_out);
 
-  int type = TYPEDIR;
+  FileBlock fb;
+  fb.name = strdup(in);
+  fb.offset = (int)offset;
+  fb.parent = parent;
+  fb.size = (int)size;
+  fb.data = buffer;
+  int type = TYPEFILE;
   fwrite(&type, sizeof(int), 1, mult_out);
-
-  int name_len = strlen(in);
+  int name_len = strlen(fb.name);
   fwrite(&name_len, sizeof(int), 1, mult_out);
-  fwrite(in, sizeof(char), name_len, mult_out);
-  fwrite(&offset, sizeof(long), 1, mult_out);
-  fwrite(&parent, sizeof(int), 1, mult_out);
+  fwrite(fb.name, sizeof(char), name_len, mult_out);
 
+  fwrite(&fb.offset, sizeof(int), 1, mult_out);
+  fwrite(&fb.parent, sizeof(int), 1, mult_out);
+  fwrite(&fb.size, sizeof(int), 1, mult_out);
+
+  fwrite(fb.data, 1, fb.size, mult_out);
+
+  free(fb.name);
+  free(fb.data);
   fclose(mult_out);
-
-  struct dirent *de;
-  while ((de = readdir(dr)) != NULL) {
-    if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
-      continue;
-
-    char path[1024];
-    snprintf(path, sizeof(path), "%s/%s", in, de->d_name);
-
-    if (de->d_type == DT_DIR) {
-      mult_add_folder_to_mult_file(path, out, offset);
-    } else if (de->d_type == DT_REG) {
-      mult_add_file_to_mult_file(path, out, offset);
-    }
-  }
-
-  closedir(dr);
 }
+
 void mult_remove_file_from_mult_file(const char *name, const char *in,
                                      int parent) {
   FILE *mult_in = fopen(in, "rb");
@@ -187,6 +163,55 @@ void mult_remove_file_from_mult_file(const char *name, const char *in,
   rename("temp_mult_file.bin", in);
 }
 
+void mult_add_folder_to_mult_file(const char *in, const char *out, int parent) {
+  DIR *dr = opendir(in);
+  if (!dr) {
+    perror("add folder open dir failed");
+    return;
+  }
+
+  FILE *mult_out = fopen(out, "ab");
+  if (!mult_out) {
+    perror("add folder file open failed");
+    closedir(dr);
+    return;
+  }
+
+  long offset = ftell(mult_out);
+
+  DirBlock dir;
+  dir.name = strdup(in);
+  dir.offset = (int)offset;
+  dir.parent = parent;
+
+  int type = TYPEDIR;
+  fwrite(&type, sizeof(int), 1, mult_out);
+  int name_len = strlen(dir.name);
+  fwrite(&name_len, sizeof(int), 1, mult_out);
+  fwrite(dir.name, sizeof(char), name_len, mult_out);
+  fwrite(&dir.offset, sizeof(int), 1, mult_out);
+  fwrite(&dir.parent, sizeof(int), 1, mult_out);
+
+  struct dirent *de;
+  while ((de = readdir(dr)) != NULL) {
+    if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+      continue;
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s", in, de->d_name);
+
+    if (de->d_type == DT_DIR) {
+      mult_add_folder_to_mult_file(path, out, dir.offset);
+    } else if (de->d_type == DT_REG) {
+      mult_add_file_to_mult_file(path, out, dir.offset);
+    }
+  }
+
+  free(dir.name);
+  fclose(mult_out);
+  closedir(dr);
+}
+
 void mult_extract_mult_file(const char *in) {
   FILE *infile = fopen(in, "rb");
   if (!infile) {
@@ -194,21 +219,9 @@ void mult_extract_mult_file(const char *in) {
     return;
   }
 
-  char magic[MULT_MAGIC_LEN];
-  fread(magic, 1, MULT_MAGIC_LEN, infile);
-  if (memcmp(magic, MULT_MAGIC, MULT_MAGIC_LEN) != 0) {
-    fprintf(stderr, "Invalid mult file\n");
-    fclose(infile);
-    return;
-  }
+  fseek(infile, MULT_MAGIC_LEN, SEEK_SET);
 
-  typedef struct {
-    char name[512];
-    long offset;
-    int parent;
-  } DirInfo;
-
-  DirInfo dirs[1024];
+  DirBlock dirs[512];
   int dir_count = 0;
   int type;
 
@@ -217,38 +230,77 @@ void mult_extract_mult_file(const char *in) {
       int name_len;
       fread(&name_len, sizeof(int), 1, infile);
 
-      if (name_len >= sizeof(dirs[0].name)) {
-        fprintf(stderr, "Directory name too long\n");
-        fseek(infile, name_len + sizeof(long) + sizeof(int), SEEK_CUR);
-        continue;
-      }
+      char *name = malloc(name_len + 1);
+      fread(name, sizeof(char), name_len, infile);
+      name[name_len] = '\0';
 
-      fread(dirs[dir_count].name, sizeof(char), name_len, infile);
-      dirs[dir_count].name[name_len] = '\0';
+      int offset, parent;
+      fread(&offset, sizeof(int), 1, infile);
+      fread(&parent, sizeof(int), 1, infile);
 
-      fread(&dirs[dir_count].offset, sizeof(long), 1, infile);
-      fread(&dirs[dir_count].parent, sizeof(int), 1, infile);
-
+      dirs[dir_count].name = name;
+      dirs[dir_count].offset = offset;
+      dirs[dir_count].parent = parent;
       dir_count++;
-
     } else if (type == TYPEFILE) {
       int name_len;
       fread(&name_len, sizeof(int), 1, infile);
-      fseek(infile, name_len + sizeof(long) + sizeof(int), SEEK_CUR);
-
-      long size;
-      fread(&size, sizeof(long), 1, infile);
+      fseek(infile, name_len + sizeof(int) * 2, SEEK_CUR);
+      int size;
+      fread(&size, sizeof(int), 1, infile);
       fseek(infile, size, SEEK_CUR);
     } else {
-      fprintf(stderr, "Unknown type: %d\n", type);
-      break;
+      fprintf(stderr, "Unknown type\n");
+      fclose(infile);
+      return;
     }
   }
 
   for (int i = 0; i < dir_count; i++) {
+    char fullpath[512] = "";
+
     char *basename = strrchr(dirs[i].name, '/');
-    basename = basename ? basename + 1 : dirs[i].name;
-    mkdir(basename, 0755);
+    if (basename) {
+      basename++;
+    } else {
+      basename = dirs[i].name;
+    }
+
+    if (dirs[i].parent == 0) {
+      strcpy(fullpath, basename);
+    } else {
+      char parent_path[512] = "";
+      char temp_paths[512][512];
+      int path_count = 0;
+      int current_offset = dirs[i].parent;
+      while (current_offset != 0) {
+        for (int j = 0; j < dir_count; j++) {
+          if (dirs[j].offset == current_offset) {
+            char *dir_basename = strrchr(dirs[j].name, '/');
+            if (dir_basename) {
+              dir_basename++;
+            } else {
+              dir_basename = dirs[j].name;
+            }
+            strcpy(temp_paths[path_count], dir_basename);
+            path_count++;
+            current_offset = dirs[j].parent;
+            break;
+          }
+        }
+      }
+
+      for (int k = path_count - 1; k >= 0; k--) {
+        if (strlen(parent_path) > 0) {
+          strcat(parent_path, "/");
+        }
+        strcat(parent_path, temp_paths[k]);
+      }
+
+      snprintf(fullpath, sizeof(fullpath), "%s/%s", parent_path, basename);
+    }
+
+    mkdir(fullpath, 0755);
   }
 
   rewind(infile);
@@ -259,55 +311,95 @@ void mult_extract_mult_file(const char *in) {
       int name_len;
       fread(&name_len, sizeof(int), 1, infile);
 
-      char fname[512];
-      if (name_len >= sizeof(fname)) {
-        fprintf(stderr, "Filename too long\n");
-        fseek(infile, name_len + sizeof(long) + sizeof(int) + sizeof(long),
-              SEEK_CUR);
-        continue;
-      }
-
+      char *fname = malloc(name_len + 1);
       fread(fname, sizeof(char), name_len, infile);
       fname[name_len] = '\0';
 
-      long data_offset, size;
-      int fparent;
-      fread(&data_offset, sizeof(long), 1, infile);
+      int offset, fparent, size;
+      fread(&offset, sizeof(int), 1, infile);
       fread(&fparent, sizeof(int), 1, infile);
-      fread(&size, sizeof(long), 1, infile);
+      fread(&size, sizeof(int), 1, infile);
+
+      char *data = malloc(size);
+      fread(data, 1, size, infile);
+
+      char fullpath[512] = "";
 
       char *basename = strrchr(fname, '/');
-      basename = basename ? basename + 1 : fname;
-
-      printf("Extracting: %s (size: %ld)\n", basename, size);
-
-      FILE *out = fopen(basename, "wb");
-      if (!out) {
-        perror("Failed to create output file");
-        fseek(infile, size, SEEK_CUR);
-        continue;
+      if (basename) {
+        basename++;
+      } else {
+        basename = fname;
       }
 
-      char buffer[8192];
-      long remaining = size;
-      while (remaining > 0) {
-        size_t to_read =
-            remaining > sizeof(buffer) ? sizeof(buffer) : remaining;
-        size_t bytes_read = fread(buffer, 1, to_read, infile);
-        if (bytes_read == 0)
-          break;
+      if (fparent == 0) {
+        strcpy(fullpath, basename);
+      } else {
 
-        fwrite(buffer, 1, bytes_read, out);
-        remaining -= bytes_read;
+        char parent_path[512] = "";
+        char temp_paths[512][512];
+        int path_count = 0;
+        int current_offset = fparent;
+
+        while (current_offset != 0) {
+          for (int j = 0; j < dir_count; j++) {
+            if (dirs[j].offset == current_offset) {
+              char *dir_basename = strrchr(dirs[j].name, '/');
+              if (dir_basename) {
+                dir_basename++;
+              } else {
+                dir_basename = dirs[j].name;
+              }
+              strcpy(temp_paths[path_count], dir_basename);
+              path_count++;
+              current_offset = dirs[j].parent;
+              break;
+            }
+          }
+        }
+
+        for (int k = path_count - 1; k >= 0; k--) {
+          if (strlen(parent_path) > 0) {
+            strcat(parent_path, "/");
+          }
+          strcat(parent_path, temp_paths[k]);
+        }
+
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", parent_path, basename);
       }
 
-      fclose(out);
+      char tmp[512];
+      strcpy(tmp, fullpath);
+      for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+          *p = '\0';
+          mkdir(tmp, 0755);
+          *p = '/';
+        }
+      }
 
+      FILE *out = fopen(fullpath, "wb");
+      if (out) {
+        fwrite(data, 1, size, out);
+        fclose(out);
+      } else {
+        perror("file write failed");
+      }
+
+      free(fname);
+      free(data);
     } else if (type == TYPEDIR) {
       int name_len;
       fread(&name_len, sizeof(int), 1, infile);
-      fseek(infile, name_len + sizeof(long) + sizeof(int), SEEK_CUR);
+      fseek(infile, name_len + sizeof(int) * 2, SEEK_CUR);
+    } else {
+      fprintf(stderr, "Unknown type\n");
+      break;
     }
+  }
+
+  for (int i = 0; i < dir_count; i++) {
+    free(dirs[i].name);
   }
 
   fclose(infile);
