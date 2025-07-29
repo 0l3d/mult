@@ -10,15 +10,15 @@
 
 typedef struct {
   char *name;
-  int offset;
+  long offset;
   int parent;
-  int size;
+  long size;
   char *data;
 } FileBlock;
 
 typedef struct {
   char *name;
-  int offset;
+  long offset;
   int parent;
 } DirBlock;
 
