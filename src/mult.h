@@ -30,4 +30,8 @@ void mult_remove_file_from_mult_file(const char *name, const char *in,
                                      int parent);
 void mult_extract_mult_file(const char *in);
 
+void mult_compress_file(const char *filename, const char *out_filename,
+                        int compression_level);
+void mult_decompress_file(const char *filename, const char *out_filename);
+
 #endif

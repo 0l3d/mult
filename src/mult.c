@@ -1,9 +1,13 @@
 #include "mult.h"
+#include <assert.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <zlib.h>
+
+#define CHUNK 16384
 
 void mult_generate_mult_file(const char *filename) {
   FILE *multfile = fopen(filename, "wb");
@@ -403,4 +407,112 @@ void mult_extract_mult_file(const char *in) {
   }
 
   fclose(infile);
+}
+
+void mult_compress_file(const char *filename, const char *out_filename,
+                        int compression_level) {
+  FILE *infile = fopen(filename, "rb");
+  if (!infile) {
+    perror("Input file open failed");
+    return;
+  }
+
+  FILE *outfile = fopen(out_filename, "wb");
+  if (!outfile) {
+    perror("Output file open failed");
+    fclose(infile);
+    return;
+  }
+  int ret, flush;
+  unsigned have;
+  z_stream stream;
+  unsigned char in[CHUNK];
+  unsigned char out[CHUNK];
+
+  stream.zalloc = Z_NULL;
+  stream.zfree = Z_NULL;
+  stream.opaque = Z_NULL;
+  ret = deflateInit(&stream, compression_level);
+  if (ret != Z_OK)
+    return;
+
+  do {
+    stream.avail_in = fread(in, 1, CHUNK, infile);
+    if (ferror(infile)) {
+      (void)deflateEnd(&stream);
+      return;
+    }
+    flush = feof(infile) ? Z_FINISH : Z_NO_FLUSH;
+    stream.next_in = in;
+
+    do {
+      stream.avail_out = CHUNK;
+      stream.next_out = out;
+      ret = deflate(&stream, flush);
+      assert(ret != Z_STREAM_ERROR);
+      have = CHUNK - stream.avail_out;
+      if (fwrite(out, 1, have, outfile) != have || ferror(outfile)) {
+        (void)deflateEnd(&stream);
+        return;
+      }
+    } while (stream.avail_out == 0);
+    assert(stream.avail_in == 0);
+  } while (flush != Z_FINISH);
+  assert(ret == Z_STREAM_END);
+
+  (void)deflateEnd(&stream);
+  fclose(infile);
+  fclose(outfile);
+}
+
+void mult_decompress_file(const char *filename, const char *out_filename) {
+  FILE *infile = fopen(filename, "rb");
+  FILE *outfile = fopen(out_filename, "wb");
+
+  int ret;
+  unsigned have;
+  z_stream stream;
+  unsigned char in[CHUNK];
+  unsigned char out[CHUNK];
+
+  stream.zalloc = Z_NULL;
+  stream.zfree = Z_NULL;
+  stream.opaque = Z_NULL;
+  ret = inflateInit(&stream);
+  if (ret != Z_OK)
+    return;
+
+  do {
+    stream.avail_in = fread(in, 1, CHUNK, infile);
+    if (ferror(infile)) {
+      (void)inflateEnd(&stream);
+      return;
+    }
+    if (stream.avail_in == 0)
+      break;
+    stream.next_in = in;
+
+    do {
+      stream.avail_out = CHUNK;
+      stream.next_out = out;
+      ret = inflate(&stream, Z_NO_FLUSH);
+      assert(ret != Z_STREAM_ERROR);
+      switch (ret) {
+      case Z_NEED_DICT:
+      case Z_DATA_ERROR:
+      case Z_MEM_ERROR:
+        (void)inflateEnd(&stream);
+        return;
+      }
+      have = CHUNK - stream.avail_out;
+      if (fwrite(out, 1, have, outfile) != have || ferror(outfile)) {
+        (void)inflateEnd(&stream);
+        return;
+      }
+    } while (stream.avail_out == 0);
+  } while (ret != Z_STREAM_END);
+
+  (void)inflateEnd(&stream);
+  fclose(infile);
+  fclose(outfile);
 }

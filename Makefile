@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS= -g -O2 -march=native
-LDFLAGS=
+LDFLAGS= -lz
 TARGET=mult 
 SOURCES=./src/mult.c ./src/main.c
 OBJECTS=$(SOURCES:.c=.o)

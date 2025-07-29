@@ -6,7 +6,7 @@ mult is simple archive format. (like tar.)
 
 - Extract Files and Folders.
 - Add Files and Folders.
-- ZLIB Compression (coming soon)
+- ZLIB Compression
 
 ## Usage
 

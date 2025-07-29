@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <zlib.h>
 
 struct Opts {
   char *files;
@@ -66,6 +67,11 @@ int main(int argc, char **argv) {
   }
   if (opts.generate) {
     if (opts.path) {
+      const char *extPtr = strrchr(opts.path, '.');
+      if (extPtr && strcmp(extPtr, ".z") == 0) {
+        printf("File already compressed.\n");
+        return -1;
+      }
       char full_path[256];
       snprintf(full_path, sizeof(full_path), "%s.mult", opts.path);
       mult_generate_mult_file(full_path);
@@ -103,7 +109,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (opts.extract && !opts.addfile && !opts.addfolder) {
+  if (opts.extract && !opts.addfile && !opts.addfolder && !opts.compress) {
     if (opts.path) {
       mult_extract_mult_file(opts.path);
     } else {
@@ -111,7 +117,27 @@ int main(int argc, char **argv) {
       return -1;
     }
   }
+  if (opts.compress && opts.zlib) {
+    if (opts.extract && opts.path) {
+      char original[512];
+      strncpy(original, opts.path, sizeof(original));
+      char *dotz = strrchr(original, '.');
+      if (dotz && strcmp(dotz, ".z") == 0) {
+        *dotz = '\0';
+      }
 
+      mult_decompress_file(opts.path, original);
+      mult_extract_mult_file(original);
+      remove(original);
+    } else if (opts.addfile || opts.addfolder) {
+      char compressed[512];
+      snprintf(compressed, sizeof(compressed), "%s.z", opts.path);
+      mult_compress_file(opts.path, compressed, Z_BEST_COMPRESSION);
+      remove(opts.path);
+      free(opts.path);
+      opts.path = strdup(compressed);
+    }
+  }
   free(opts.files);
   free(opts.folders);
   free(opts.path);
